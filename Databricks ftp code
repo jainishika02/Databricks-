@@ -1,0 +1,147 @@
+import ftplib
+import os
+
+def list_ftp_files(host, username='anonymous', password='anonymous@', path='/'):
+    """
+    List all files at an FTP path recursively.
+    
+    Args:
+        host: FTP server hostname or IP
+        username: FTP username (default: anonymous)
+        password: FTP password (default: anonymous@)
+        path: FTP path to list (default: root '/')
+    """
+    ftp = ftplib.FTP()
+    
+    try:
+        # Connect to FTP server
+        print(f"Connecting to {host}...")
+        ftp.connect(host, 21)
+        ftp.login(username, password)
+        print(f"Connected successfully!\n")
+        
+        all_files = []
+        
+        def list_directory(current_path):
+            """Recursively list all files in a directory."""
+            try:
+                items = []
+                ftp.retrlines(f'LIST {current_path}', items.append)
+                
+                for item in items:
+                    parts = item.split()
+                    if not parts:
+                        continue
+                    
+                    permissions = parts[0]
+                    name = parts[-1]
+                    
+                    # Skip . and .. entries
+                    if name in ('.', '..'):
+                        continue
+                    
+                    full_path = f"{current_path.rstrip('/')}/{name}"
+                    
+                    if permissions.startswith('d'):
+                        # It's a directory - recurse into it
+                        print(f"📁 DIR:  {full_path}")
+                        list_directory(full_path)
+                    else:
+                        # It's a file
+                        size = parts[4] if len(parts) > 4 else 'unknown'
+                        print(f"📄 FILE: {full_path} ({size} bytes)")
+                        all_files.append(full_path)
+                        
+            except ftplib.error_perm as e:
+                print(f"  Permission denied: {current_path} - {e}")
+            except Exception as e:
+                print(f"  Error listing {current_path}: {e}")
+        
+        print(f"Listing all files at path: {path}\n")
+        print("-" * 60)
+        list_directory(path)
+        print("-" * 60)
+        print(f"\nTotal files found: {len(all_files)}")
+        
+        return all_files
+        
+    except ftplib.all_errors as e:
+        print(f"FTP error: {e}")
+        return []
+    finally:
+        try:
+            ftp.quit()
+            print("Connection closed.")
+        except:
+            ftp.close()
+
+
+def list_ftp_files_simple(host, username='anonymous', password='anonymous@', path='/'):
+    """
+    Simple (non-recursive) listing of files at an FTP path.
+    """
+    ftp = ftplib.FTP()
+    
+    try:
+        ftp.connect(host, 21)
+        ftp.login(username, password)
+        ftp.cwd(path)
+        
+        files = []
+        dirs = []
+        
+        def parse_line(line):
+            parts = line.split()
+            if parts:
+                name = parts[-1]
+                if line.startswith('d'):
+                    dirs.append(name)
+                else:
+                    files.append(name)
+        
+        ftp.retrlines('LIST', parse_line)
+        
+        print(f"\nContents of {path} on {host}:")
+        print(f"\nDirectories ({len(dirs)}):")
+        for d in dirs:
+            print(f"  📁 {d}")
+        
+        print(f"\nFiles ({len(files)}):")
+        for f in files:
+            print(f"  📄 {f}")
+            
+        return files, dirs
+        
+    except ftplib.all_errors as e:
+        print(f"FTP error: {e}")
+        return [], []
+    finally:
+        try:
+            ftp.quit()
+        except:
+            ftp.close()
+
+
+# ─── Example Usage ────────────────────────────────────────────────────────────
+
+if __name__ == "__main__":
+    
+    # Example 1: Recursive listing (using a public FTP server for demo)
+    print("=" * 60)
+    print("RECURSIVE FTP FILE LISTING")
+    print("=" * 60)
+    
+    # Public FTP server example
+    HOST     = "ftp.dlptest.com"   # replace with your FTP host
+    USERNAME = "dlpuser"            # replace with your username
+    PASSWORD = "rNrKYTX9g7z3RgJRmxWuGHbeu" # replace with your password
+    PATH     = "/"                  # replace with your target path
+    
+    all_files = list_ftp_files(HOST, USERNAME, PASSWORD, PATH)
+    
+    # Example 2: Simple (non-recursive) listing
+    print("\n" + "=" * 60)
+    print("SIMPLE FTP FILE LISTING")
+    print("=" * 60)
+    
+    files, dirs = list_ftp_files_simple(HOST, USERNAME, PASSWORD, PATH)
