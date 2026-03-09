@@ -1,111 +1,143 @@
-import ftplib
-import os
+import paramiko
 
-def list_ftp_files(host, username='anonymous', password='anonymous@', path='/'):
+def list_sftp_files(host, username, password, path='/', port=22):
     """
-    List all files at an FTP path recursively.
-    
+    List all files at an SFTP path recursively.
+
     Args:
-        host: FTP server hostname or IP
-        username: FTP username (default: anonymous)
-        password: FTP password (default: anonymous@)
-        path: FTP path to list (default: root '/')
+        host: SFTP server hostname or IP
+        username: SFTP username
+        password: SFTP password
+        path: Remote path to list (default: '/')
+        port: SFTP port (default: 22)
     """
-    ftp = ftplib.FTP()
-    
+    transport = None
+    sftp = None
+
     try:
-        # Connect to FTP server
-        print(f"Connecting to {host}...")
-        ftp.connect(host, 21)
-        ftp.login(username, password)
-        print(f"Connected successfully!\n")
-        
+        print(f"Connecting to {host}:{port}...")
+        transport = paramiko.Transport((host, port))
+        transport.connect(username=username, password=password)
+        sftp = paramiko.SFTPClient.from_transport(transport)
+        print("Connected successfully!\n")
+
         all_files = []
-        
+
         def list_directory(current_path):
             """Recursively list all files in a directory."""
             try:
-                items = []
-                ftp.retrlines(f'LIST {current_path}', items.append)
-                
+                items = sftp.listdir_attr(current_path)
+
                 for item in items:
-                    parts = item.split()
-                    if not parts:
-                        continue
-                    
-                    permissions = parts[0]
-                    name = parts[-1]
-                    
-                    # Skip . and .. entries
-                    if name in ('.', '..'):
-                        continue
-                    
-                    full_path = f"{current_path.rstrip('/')}/{name}"
-                    
-                    if permissions.startswith('d'):
-                        # It's a directory - recurse into it
+                    full_path = f"{current_path.rstrip('/')}/{item.filename}"
+
+                    import stat
+                    if stat.S_ISDIR(item.st_mode):
                         print(f"📁 DIR:  {full_path}")
                         list_directory(full_path)
                     else:
-                        # It's a file
-                        size = parts[4] if len(parts) > 4 else 'unknown'
+                        size = item.st_size
                         print(f"📄 FILE: {full_path} ({size} bytes)")
                         all_files.append(full_path)
-                        
-            except ftplib.error_perm as e:
-                print(f"  Permission denied: {current_path} - {e}")
+
+            except PermissionError:
+                print(f"  Permission denied: {current_path}")
             except Exception as e:
                 print(f"  Error listing {current_path}: {e}")
-        
+
         print(f"Listing all files at path: {path}\n")
         print("-" * 60)
         list_directory(path)
         print("-" * 60)
         print(f"\nTotal files found: {len(all_files)}")
-        
+
         return all_files
-        
-    except ftplib.all_errors as e:
-        print(f"FTP error: {e}")
+
+    except paramiko.AuthenticationException:
+        print("Authentication failed. Check your username/password.")
+        return []
+    except paramiko.SSHException as e:
+        print(f"SSH error: {e}")
+        return []
+    except Exception as e:
+        print(f"Connection error: {e}")
         return []
     finally:
-        try:
-            ftp.quit()
+        if sftp:
+            sftp.close()
+        if transport:
+            transport.close()
             print("Connection closed.")
-        except:
-            ftp.close()
 
 
-def list_ftp_files_simple(host, username='anonymous', password='anonymous@', path='/'):
+def list_sftp_files_simple(host, username, password, path='/', port=22):
     """
-    Simple (non-recursive) listing of files at an FTP path.
+    Simple (non-recursive) listing of files at an SFTP path.
     """
-    ftp = ftplib.FTP()
-    
+    transport = None
+    sftp = None
+
     try:
-        ftp.connect(host, 21)
-        ftp.login(username, password)
-        ftp.cwd(path)
-        
+        transport = paramiko.Transport((host, port))
+        transport.connect(username=username, password=password)
+        sftp = paramiko.SFTPClient.from_transport(transport)
+
+        import stat
         files = []
         dirs = []
-        
-        def parse_line(line):
-            parts = line.split()
-            if parts:
-                name = parts[-1]
-                if line.startswith('d'):
-                    dirs.append(name)
-                else:
-                    files.append(name)
-        
-        ftp.retrlines('LIST', parse_line)
-        
-        print(f"\nContents of {path} on {host}:")
+
+        items = sftp.listdir_attr(path)
+        for item in items:
+            if stat.S_ISDIR(item.st_mode):
+                dirs.append(item.filename)
+            else:
+                files.append((item.filename, item.st_size))
+
+        print(f"\nContents of {path} on {host}:{port}")
         print(f"\nDirectories ({len(dirs)}):")
         for d in dirs:
             print(f"  📁 {d}")
-        
+
+        print(f"\nFiles ({len(files)}):")
+        for name, size in files:
+            print(f"  📄 {name} ({size} bytes)")
+
+        return files, dirs
+
+    except Exception as e:
+        print(f"SFTP error: {e}")
+        return [], []
+    finally:
+        if sftp:
+            sftp.close()
+        if transport:
+            transport.close()
+
+
+# ─── Example Usage ────────────────────────────────────────────────────────────
+
+if __name__ == "__main__":
+
+    HOST     = "your.sftp.server.com"  # replace with your host
+    USERNAME = "your_username"          # replace with your username
+    PASSWORD = "your_password"          # replace with your password
+    PATH     = "/"                      # replace with your target path
+    PORT     = 22
+
+    # Install dependency first:
+    # pip install paramiko
+
+    # Recursive listing
+    print("=" * 60)
+    print("RECURSIVE SFTP FILE LISTING")
+    print("=" * 60)
+    all_files = list_sftp_files(HOST, USERNAME, PASSWORD, PATH, PORT)
+
+    # Simple listing
+    print("\n" + "=" * 60)
+    print("SIMPLE SFTP FILE LISTING")
+    print("=" * 60)
+    files, dirs = list_sftp_files_simple(HOST, USERNAME, PASSWORD, PATH, PORT)        
         print(f"\nFiles ({len(files)}):")
         for f in files:
             print(f"  📄 {f}")
