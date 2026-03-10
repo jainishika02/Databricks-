@@ -1,111 +1,44 @@
-import paramiko
+# =============================================================================
+# SNAP 1: CSV Formatter
+# Delimiter: | , Quote mode: NONE, No header, UTF-8, LF, Escape: \
+# =============================================================================
 
-def list_sftp_files(host, username, password, path='/', port=22):
-    """
-    List all files at an SFTP path recursively.
+print("=" * 60)
+print("STEP: CSV Formatter — Converting DataFrame to pipe-delimited CSV ...")
+print("=" * 60)
 
-    Args:
-        host: SFTP server hostname or IP
-        username: SFTP username
-        password: SFTP password
-        path: Remote path to list (default: '/')
-        port: SFTP port (default: 22)
-    """
-    transport = None
-    sftp = None
+import io
 
-    try:
-        print(f"Connecting to {host}:{port}...")
-        transport = paramiko.Transport((host, port))
-        transport.connect(username=username, password=password)
-        sftp = paramiko.SFTPClient.from_transport(transport)
-        print("Connected successfully!\n")
+# Convert Spark DataFrame to pipe-delimited CSV string
+csv_buffer = io.StringIO()
+pandas_df = staging_df.toPandas()
 
-        all_files = []
+csv_content = pandas_df.to_csv(
+    sep="|",              # Delimiter: |
+    index=False,          # No index
+    header=False,         # No header (Use header = False)
+    quoting=3,            # Quote mode NONE (csv.QUOTE_NONE)
+    escapechar="\\",      # Escape character: \
+    lineterminator="\n"   # Newline: LF
+)
 
-        def list_directory(current_path):
-            """Recursively list all files in a directory."""
-            try:
-                items = sftp.listdir_attr(current_path)
-
-                for item in items:
-                    full_path = f"{current_path.rstrip('/')}/{item.filename}"
-
-                    import stat
-                    if stat.S_ISDIR(item.st_mode):
-                        print(f"📁 DIR:  {full_path}")
-                        list_directory(full_path)
-                    else:
-                        size = item.st_size
-                        print(f"📄 FILE: {full_path} ({size} bytes)")
-                        all_files.append(full_path)
-
-            except PermissionError:
-                print(f"  Permission denied: {current_path}")
-            except Exception as e:
-                print(f"  Error listing {current_path}: {e}")
-
-        print(f"Listing all files at path: {path}\n")
-        print("-" * 60)
-        list_directory(path)
-        print("-" * 60)
-        print(f"\nTotal files found: {len(all_files)}")
-
-        return all_files
-
-    except paramiko.AuthenticationException:
-        print("Authentication failed. Check your username/password.")
-        return []
-    except paramiko.SSHException as e:
-        print(f"SSH error: {e}")
-        return []
-    except Exception as e:
-        print(f"Connection error: {e}")
-        return []
-    finally:
-        if sftp:
-            sftp.close()
-        if transport:
-            transport.close()
-            print("Connection closed.")
+print(f"✔ CSV formatted successfully.")
 
 
-def list_sftp_files_simple(host, username, password, path='/', port=22):
-    """
-    Simple (non-recursive) listing of files at an SFTP path.
-    """
-    transport = None
-    sftp = None
+# =============================================================================
+# SNAP 2: Binary to Document
+# Encode or Decode: NONE — pass content as-is (no encoding/decoding)
+# =============================================================================
 
-    try:
-        transport = paramiko.Transport((host, port))
-        transport.connect(username=username, password=password)
-        sftp = paramiko.SFTPClient.from_transport(transport)
+print("=" * 60)
+print("STEP: Binary to Document — Encode/Decode: NONE ...")
+print("=" * 60)
 
-        import stat
-        files = []
-        dirs = []
+# No encoding/decoding needed — content passes through as-is
+document_content = csv_content.encode("utf-8")  # keep as UTF-8 bytes
 
-        items = sftp.listdir_attr(path)
-        for item in items:
-            if stat.S_ISDIR(item.st_mode):
-                dirs.append(item.filename)
-            else:
-                files.append((item.filename, item.st_size))
-
-        print(f"\nContents of {path} on {host}:{port}")
-        print(f"\nDirectories ({len(dirs)}):")
-        for d in dirs:
-            print(f"  📁 {d}")
-
-        print(f"\nFiles ({len(files)}):")
-        for name, size in files:
-            print(f"  📄 {name} ({size} bytes)")
-
-        return files, dirs
-
-    except Exception as e:
-        print(f"SFTP error: {e}")
+print(f"✔ Binary to Document conversion done.")
+print(f"   Content size: {len(document_content)} bytes")        print(f"SFTP error: {e}")
         return [], []
     finally:
         if sftp:
