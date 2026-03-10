@@ -1,0 +1,182 @@
+# =============================================================================
+# SNAP: Header
+# Expression: 'HI' + Date.now().toLocaleDateString({"format": "MM/dd/yyyy"}) 
+#             + 'I' + 'HUMANA'
+# Target path: $HEADER
+# =============================================================================
+
+from datetime import datetime
+
+print("=" * 60)
+print("STEP: Building Header Record ...")
+print("=" * 60)
+
+# Date.now() in MM/dd/yyyy format
+current_date = datetime.now().strftime("%m/%d/%Y")
+
+# Build header — mimics SnapLogic Header snap expression
+header = f"HI{current_date}IHUMANA"
+
+print(f"✔ Header record built successfully.")
+print(f"   Date    : {current_date}")
+print(f"   HEADER  : {header}")
+
+# =============================================================================
+# SNAP: Join (Merge)
+# Join type: Merge
+# Sorted streams: Ascending
+# Purpose: Combine Header + Data rows + Trailer into single output
+# =============================================================================
+
+print("=" * 60)
+print("STEP: Join (Merge) — Combining Header + Data + Trailer ...")
+print("=" * 60)
+
+# Convert staging_df to pipe-delimited rows
+pandas_df = staging_df.toPandas()
+
+data_rows = pandas_df.to_csv(
+    sep="|",
+    index=False,
+    header=False,
+    quoting=3,        # QUOTE_NONE
+    escapechar="\\",
+    lineterminator="\n"
+)
+
+# Merge Header + Data + Trailer in order (Ascending)
+merged_content = "\n".join([
+    header,       # Header row  → from Header snap
+    data_rows,    # Data rows   → from CSV Formatter snap
+    trailer       # Trailer row → from Trailer snap
+])
+
+print(f"✔ Merge completed successfully.")
+print(f"   Header  : {header}")
+print(f"   Records : {staging_df.count()} rows")
+print(f"   Trailer : {trailer}")
+print(f"\n--- Preview (first 500 chars) ---")
+print(merged_content[:500])
+
+
+# =============================================================================
+# SNAP: Filter
+# Filter expression: $.hasPath("$TRAILER")
+# Purpose: Only pass through records that have TRAILER field
+# =============================================================================
+
+print("=" * 60)
+print("STEP: Filter — Checking if Trailer exists ...")
+print("=" * 60)
+
+# $.hasPath("$TRAILER") → check if trailer variable exists and is not empty
+if trailer:
+    print(f"✔ Trailer exists — passing through.")
+    print(f"   TRAILER: {trailer}")
+else:
+    print("✘ Trailer not found — stopping pipeline.")
+    raise Exception({
+        "reason": "Filter failed — TRAILER field not found",
+        "error": "$.hasPath('$TRAILER') returned False"
+    })
+
+# =============================================================================
+# SNAP: Mapper
+# Expression: [$HEADER, $content.substring('\n',$content.length-1
+#              .replaceAll('\n\r','\r'), $TRAILER].join('\r')]
+# Target path: $content
+# Purpose: Combine Header + Data + Trailer with \r line endings
+# =============================================================================
+
+print("=" * 60)
+print("STEP: Mapper — Building final file content ...")
+print("=" * 60)
+
+# Step 1: Take data_rows, strip leading newline, clean line endings
+# $content.substring('\n', $content.length-1).replaceAll('\n\r', '\r')
+cleaned_data = data_rows.lstrip("\n")           # substring from first \n
+cleaned_data = cleaned_data.rstrip("\n")        # remove trailing newline
+cleaned_data = cleaned_data.replace("\n\r", "\r")  # replaceAll('\n\r', '\r')
+
+# Step 2: Join Header + cleaned data + Trailer with \r
+# [$HEADER, $content, $TRAILER].join('\r')
+final_content = "\r".join([
+    header,        # $HEADER
+    cleaned_data,  # cleaned $content
+    trailer        # $TRAILER
+])
+
+print(f"✔ Mapper completed successfully.")
+print(f"   Header  : {header}")
+print(f"   Trailer : {trailer}")
+print(f"   Total content size: {len(final_content)} chars")
+print(f"\n--- Preview (first 500 chars) ---")
+print(final_content[:500])
+
+# =============================================================================
+# SNAP: Write File at Local Location
+# File name: _LOCAL_FTPLOCATION + _LOCAL_FILENAME + YYYYMMdd + '.dat'
+# File action: OVERWRITE
+# =============================================================================
+
+from datetime import datetime
+import pytz
+import os
+
+print("=" * 60)
+print("STEP: Write File at Local Location ...")
+print("=" * 60)
+
+# ── Config (update these to match your _LOCAL_FTPLOCATION & _LOCAL_FILENAME) ──
+LOCAL_FTPLOCATION = "/dbfs/mnt/pdpstars/"   # ← update to your path
+LOCAL_FILENAME    = "PDPSTARS_ELIGIBILITY_" # ← update to your filename prefix
+
+# Date in US/Eastern timezone → YYYYMMdd format
+eastern   = pytz.timezone("US/Eastern")
+file_date = datetime.now(eastern).strftime("%Y%m%d")
+
+# Build full file path
+file_name = f"{LOCAL_FILENAME}{file_date}.dat"
+file_path = f"{LOCAL_FTPLOCATION}{file_name}"
+
+print(f"   File path : {file_path}")
+
+# Write file — OVERWRITE mode
+os.makedirs(LOCAL_FTPLOCATION, exist_ok=True)
+
+with open(file_path, "w", encoding="utf-8") as f:
+    f.write(final_content)
+
+print(f"✔ File written successfully.")
+print(f"   File name : {file_name}")
+print(f"   File size : {os.path.getsize(file_path)} bytes")
+
+
+# =============================================================================
+# SNAP: File Reader
+# File: _LOCAL_FTPLOCATION + _LOCAL_FILENAME + YYYYMMdd + '.dat'
+# Purpose: Read the file written in previous step
+# =============================================================================
+
+print("=" * 60)
+print("STEP: File Reader — Reading file from local location ...")
+print("=" * 60)
+
+# Same file path as Write File snap — reuse same variables
+# file_path is already built in previous step
+
+try:
+    with open(file_path, "r", encoding="utf-8") as f:
+        file_content = f.read()
+
+    print(f"✔ File read successfully.")
+    print(f"   File path : {file_path}")
+    print(f"   File size : {os.path.getsize(file_path)} bytes")
+    print(f"\n--- Preview (first 500 chars) ---")
+    print(file_content[:500])
+
+except FileNotFoundError:
+    raise Exception({
+        "reason": f"File Reader failed — file not found: {file_path}",
+        "error": f"File {file_path} does not exist"
+    })
