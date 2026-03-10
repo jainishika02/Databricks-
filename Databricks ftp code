@@ -1,1 +1,208 @@
+# =============================================================================
+# SNAP 1: Write File at Business Location
+# File: _BUSINESS_FTPLOCATION + _BUSINESS_FILENAME + YYYYMMdd + '.dat'
+# File action: OVERWRITE
+# =============================================================================
 
+print("=" * 60)
+print("STEP: Write File at Business Location ...")
+print("=" * 60)
+
+# ── Config (update these to match your business location variables) ──
+BUSINESS_FTPLOCATION = "/dbfs/mnt/pdpstars/business/"  # ← update path
+BUSINESS_FILENAME    = "PDPSTARS_ELIGIBILITY_"          # ← update filename prefix
+
+# Reuse same date from previous step
+business_file_name = f"{BUSINESS_FILENAME}{file_date}.dat"
+business_file_path = f"{BUSINESS_FTPLOCATION}{business_file_name}"
+
+os.makedirs(BUSINESS_FTPLOCATION, exist_ok=True)
+
+with open(business_file_path, "w", encoding="utf-8") as f:
+    f.write(final_content)
+
+print(f"✔ File written to business location successfully.")
+print(f"   File path : {business_file_path}")
+print(f"   File size : {os.path.getsize(business_file_path)} bytes")
+
+
+# =============================================================================
+# SNAP 2: SQL Server - Execute
+# SELECT vendor file details from dbo.PCMS_VendorFileDetails
+# Pass through: Yes
+# =============================================================================
+
+print("=" * 60)
+print("STEP: SELECT Vendor File Details ...")
+print("=" * 60)
+
+vendor_query = """
+    SELECT
+        vfd.File_Name,
+        vfd.File_Path,
+        vfd.SendFileviaFTP
+    FROM dbo.PCMS_VendorFileDetails vfd
+    INNER JOIN PCMS_VendorFiles vf
+        ON vfd.File_ID = vf.FILE_ID
+    WHERE vf.Description = 'Humana_outcomes_out_benf_csv'
+"""
+
+vendor_df = execute_query(vendor_query)
+
+vendor_df.show(truncate=False)
+
+# Extract values for use in next snap
+vendor_row      = vendor_df.first()
+file_name_vfd   = vendor_row["File_Name"]
+file_path_vfd   = vendor_row["File_Path"]
+send_via_ftp    = vendor_row["SendFileviaFTP"]
+
+print(f"✔ Vendor file details fetched successfully.")
+print(f"   File Name     : {file_name_vfd}")
+print(f"   File Path     : {file_path_vfd}")
+print(f"   Send via FTP  : {send_via_ftp}")
+
+
+Child pipeline 4
+
+
+# =============================================================================
+# CHILD PIPELINE SNAPS CONVERSION
+# =============================================================================
+
+# -----------------------------------------------------------------------------
+# SNAP 1: Filter
+# Filter expression: _IS_ACTIVE == 'true'
+# Purpose: Only process active records
+# -----------------------------------------------------------------------------
+
+print("=" * 60)
+print("STEP 1: Filter — _IS_ACTIVE == 'true' ...")
+print("=" * 60)
+
+# _IS_ACTIVE is a pipeline parameter passed from parent pipeline
+if _IS_ACTIVE == 'true':
+    print(f"✔ Filter passed — IS_ACTIVE is true, continuing pipeline.")
+else:
+    print("✘ Filter failed — IS_ACTIVE is not true, stopping pipeline.")
+    raise Exception({
+        "reason": "Filter failed — _IS_ACTIVE is not true",
+        "error": f"_IS_ACTIVE value is: {_IS_ACTIVE}"
+    })
+
+
+# -----------------------------------------------------------------------------
+# SNAP 2: SQL Server - Execute
+# SELECT SRC_MBR_ID, SRC_PLATFORM_CD, SOURCECODE
+# FROM DBO.PDPSTARS_EligibilityStaging
+# WHERE TRY_CAST(Campaign_TermDt AS DATE) > GETDATE()
+# Pass through: Yes
+# -----------------------------------------------------------------------------
+
+print("=" * 60)
+print("STEP 2: SELECT from PDPSTARS_EligibilityStaging ...")
+print("=" * 60)
+
+child_select_query = """
+    SELECT
+        SRC_MBR_ID,
+        SRC_PLATFORM_CD,
+        SOURCECODE
+    FROM DBO.PDPSTARS_EligibilityStaging
+    WHERE TRY_CAST(Campaign_TermDt AS DATE) > GETDATE()
+"""
+
+child_df = execute_query(child_select_query)
+
+record_count = child_df.count()
+print(f"✔ Fetched {record_count} records from PDPSTARS_EligibilityStaging.")
+
+
+# -----------------------------------------------------------------------------
+# SNAP 3: Mapper
+# Mappings:
+#   $SOURCECODE      → SOURCECODE
+#   $SRC_MBR_ID      → SRC_MBR_ID
+#   $SRC_PLATFORM_CD → SRC_PLATFORM_CD
+# -----------------------------------------------------------------------------
+
+print("=" * 60)
+print("STEP 3: Mapper — Renaming columns ...")
+print("=" * 60)
+
+from pyspark.sql.functions import col
+
+mapped_df = child_df.select(
+    col("SOURCECODE").alias("SOURCECODE"),
+    col("SRC_MBR_ID").alias("SRC_MBR_ID"),
+    col("SRC_PLATFORM_CD").alias("SRC_PLATFORM_CD")
+)
+
+print(f"✔ Mapper completed — {mapped_df.count()} records mapped.")
+
+
+# -----------------------------------------------------------------------------
+# SNAP 4: CSV Formatter
+# Columns    : SRC_MBR_ID, SRC_PLATFORM_CD, SOURCECODE
+# Delimiter  : , (comma)
+# Quote char : "
+# Quote mode : ALL
+# Write CSV header: Yes
+# UTF-8, LF, Escape: \
+# -----------------------------------------------------------------------------
+
+print("=" * 60)
+print("STEP 4: CSV Formatter — Converting to CSV ...")
+print("=" * 60)
+
+import csv
+import io
+
+pandas_child_df = mapped_df.toPandas()
+
+csv_buffer = io.StringIO()
+pandas_child_df.to_csv(
+    csv_buffer,
+    sep=",",           # Delimiter: comma
+    index=False,
+    header=True,       # Write CSV header: Yes
+    quoting=csv.QUOTE_ALL,   # Quote mode: ALL
+    quotechar='"',     # Quote character: "
+    escapechar="\\",   # Escape character: \
+    lineterminator="\n"  # Newline: LF
+)
+
+csv_child_content = csv_buffer.getvalue()
+
+print(f"✔ CSV formatted successfully.")
+print(f"   Total size: {len(csv_child_content)} chars")
+print(f"\n--- Preview (first 300 chars) ---")
+print(csv_child_content[:300])
+
+
+# -----------------------------------------------------------------------------
+# SNAP 5: File Writer
+# File: _FTPLOCATION + '/' + _FILENAME + YYYYMMdd + '.csv'
+# File action: OVERWRITE
+# -----------------------------------------------------------------------------
+
+print("=" * 60)
+print("STEP 5: File Writer — Writing CSV to location ...")
+print("=" * 60)
+
+# ── Config (update these to match your _FTPLOCATION & _FILENAME params) ──
+_FTPLOCATION = "/dbfs/mnt/pdpstars/output"   # ← update to your path
+_FILENAME    = "PDPSTARS_ELIGIBILITY_"        # ← update to your filename
+
+# Date in US/Eastern → YYYYMMdd
+csv_file_name = f"{_FILENAME}{file_date}.csv"
+csv_file_path = f"{_FTPLOCATION}/{csv_file_name}"
+
+os.makedirs(_FTPLOCATION, exist_ok=True)
+
+with open(csv_file_path, "w", encoding="utf-8") as f:
+    f.write(csv_child_content)
+
+print(f"✔ File written successfully.")
+print(f"   File path : {csv_file_path}")
+print(f"   File size : {os.path.getsize(csv_file_path)} bytes")
